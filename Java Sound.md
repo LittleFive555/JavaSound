@@ -327,3 +327,137 @@ Java Sound API包含一个 [`AudioPermission`](https://docs.oracle.com/javase/8/
 
 如果您的程序无权录制（或播放）声音，则在尝试打开一条线路时会引发异常。除了捕获异常并将问题报告给用户以外，您在程序中无能为力，因为无法通过API来更改权限。（如果可以，那它们将毫无意义，因为这样的话将没有什么安全的方法了！）通常，权限是在一个或多个策略配置文件中设置的，用户或系统管理员可以使用文本编辑器或Policy Tool程序对其进行编辑。
 
+## （三）播放音频
+
+回放(playback)有时称为*演示(presentation)*或*渲染(rendering)*。这些是通用术语，也适用于音频以外的其他类型的媒体。基本特征是将数据序列传递到某个地方，以供用户最终感知。如果数据是基于时间的（如音频一样），则必须以正确的速率传送。音频甚至比视频要多，因此保持数据流的速率非常重要，因为声音播放的中断通常会产生很大的喀哒声(clicks)或令人讨厌的失真。Java Sound API旨在帮助应用程序平稳连续播放音频，即使是很长的音频。
+
+之前，您了解了如何从音频系统或调音台获得线路。在这里，您将学习如何通过一条线播放声音。
+
+如您所知，可以使用两种线路来播放声音：[`Clip`](https://docs.oracle.com/javase/8/docs/api/javax/sound/sampled/Clip.html)和[`SourceDataLine`](https://docs.oracle.com/javase/8/docs/api/javax/sound/sampled/SourceDataLine.html)。两者之间的主要区别在于，使用`Clip`可以一次指定所有声音数据，然后再播放，而使用`SourceDataLine`可以在播放过程中连续写入新的数据缓冲。尽管在很多情况下都可以在`Clip`或`SourceDataLine`之间随意选用，但以下条件有助于确定哪种线更适合特定情况：
+
+- 使用`Clip`时，你有非实时声音数据可以预先加载到内存中。
+
+  例如，您可能将短音频文件读入clip。如果您想播放音频不止一次，则`Clip`比`SourceDataLine`更方便，尤其是当您要播放循环（重复播放全部或部分声音）时。如果您需要在声音中的任意位置开始播放，则`Clip`接口提供了一种轻松进行播放的方法。最后，从`Clip`播放的延迟通常比从`SourceDataLine`播放的缓冲的延迟少。换句话说，由于声音已预先加载到clip中，因此可以立即开始播放，而不必等待缓冲区被填满。
+
+- 将`SourceDataLine`用作流数据，例如无法一次放入内存的长声音文件，或者在播放之前无法得知其数据的声音。
+
+  作为后一种情况的示例，假设您正在监视声音输入——即在捕获声音时播放声音。如果您没有可以直接从输出端口发送回输入音频的混音器，则您的应用程序将必须获取捕获的数据并将其发送到音频输出混音器。在这种情况下，`SourceDataLine`比`Clip`更合适。当您响应用户的输入以交互方式合成或操纵声音数据时，会发生另一个无法预先知道的声音示例。例如，想象一个游戏，当用户移动鼠标时，通过将声音从一种声音“变形”到另一种声音来给出听觉反馈。声音转换的动态性质要求应用程序在播放期间不断更新声音数据，而不是在播放开始前一次性提供到位。
+
+### 使用Clip
+
+您可以如前面在《[获取所需类型的行](https://docs.oracle.com/javase/tutorial/sound/accessing.html#113154)》中所述获得`Clip`；为第一个参数构造一个`DataLine.Info`对象`Clip.class`，并将`DataLine.Info`作为参数传递给`AudioSystem`或`Mixer`的`getLine`方法。
+
+获得一条线只是意味着您已经有了一种引用它的方式。`getLine`实际上并没有为您预留线路。由于混音器可能只有有限数量的所需类型的线路，因此可能发生在调用`getLine`获取clip之后，正准备播放音频时，另一个应用程序会插一脚进来并抢走clip。要实际使用clip，您需要通过调用以下`Clip`方法之一，将其保留供程序专用：
+
+```java
+void open(AudioInputStream stream)
+void open(AudioFormat format, byte[] data, int offset, int bufferSize)
+```
+
+尽管上面第二种`open`方法中有参数`bufferSize`，`Clip`（与`SourceDataLine`不同）并没有用于将新数据写入缓冲区的方法。这里的`bufferSize`参数仅指定要加载到clip中的字节数组的数量。它不像使用`SourceDataLine`时的缓冲区那样，让您可以将更多数据加载到其中。
+
+打开clip后，您可以使用`Clip`的`setFramePosition`或`setMicroSecondPosition`方法指定应在数据中的哪一点开始播放。否则，它将从头开始。您也可以使用`setLoopPoints`方法将播放设置为重复循环。
+
+准备开始播放时，只需调用该`start`方法。要停止或暂停clip，请调用`stop`方法，如果要继续播放，则再次调用`start`方法。clip会记住停止播放的媒体位置，因此不需要显式的暂停和恢复方法。如果您不希望它在中断处继续播放，则可以使用上述提到的<u>帧或微秒定位</u>方法将剪辑“倒回”到开头（或其他任何位置）。
+
+`Clip`的音量和活跃状态（活跃与非活跃）可以分别通过调用`DataLine`的`getLevel`和`isActive`方法来观测。正在播放音频的`Clip`是活跃的。
+
+### 使用SourceDataLine
+
+获得一个`SourceDataLine`与获得一个`Clip`相似。打开`SourceDataLine`也类似于打开`Clip`，目的是再次保留该线路。但是，您可以使用另一种方法，该方法继承自`DataLine`：
+
+```java
+void open(AudioFormat format)
+```
+
+请注意，打开`SourceDataLine`时，您尚未将任何声音数据与线路关联，这与打开`Clip`不同。相反，您只需指定要播放的音频数据的格式。系统使用默认缓冲区长度。
+
+您还可以使用此变体方法规定一定的缓冲区长度（以字节为单位）：
+
+```java
+void open(AudioFormat format, int bufferSize)
+```
+
+为了与类似方法保持一致，该`bufferSize`参数以字节表示，但必须与整数个帧相对应。
+
+除了使用上述open方法之外，还可以使用`Line`的不带参数的`open()`方法打开`SourceDataLine`。在这种情况下，将以其默认音频格式和缓冲区大小打开该线路。但是，您之后将无法更改它们。如果您想知道线路的默认音频格式和缓冲区大小，则可以调用`DataLine`的 `getFormat`和`getBufferSize`方法，甚至在线路打开之前就可以调用。
+
+一旦`SourceDataLine`打开，就可以开始播放声音。为此，您可以调用`DataLine`的start方法，然后将数据重复写入该线路的播放缓冲区。
+
+start方法允许线路在缓冲区中有任何数据后立即开始播放声音。您可以通过以下方法将数据放入缓冲区：
+
+```java
+int write(byte[] b, int offset, int length)
+```
+
+数组的偏移量以字节表示，数组的长度也是如此。
+
+该线路开始尽快地将数据发送到混音器。当混音器本身将数据传递到其目标时，`SourceDataLine`生成一个`START`事件。（在Java Sound API的典型实现中，源代码线路将数据提供给混合器的那一刻与混合器将数据提供给其目标的那一刻之间的延迟可以忽略不计，即，该延迟远小于一个采样时间。该`START`事件被发送到该线路的侦听器，如下面在《[监视线路状态](https://docs.oracle.com/javase/tutorial/sound/playing.html#113711)》中所述。现在该线路被认为是活跃的，因此`DataLine`的`isActive`方法将返回`true`。注意，所有这些仅在缓冲区包含要播放的数据时发生，而不一定是在调用start方法时。如果您在新的`SourceDataLine`调用了`start`，但从未将数据写入缓冲区，因此该行永远不会处于活动状态，`START`也永远不会发送事件。（但是，在这种情况下，`DataLine`的`isRunning`方法将返回`true`。）
+
+那么，您如何知道要向缓冲区写入多少数据，以及何时发送第二批数据呢？幸运的是，您无需计算第二次写入操作的时间，即可与第一个缓冲区的末尾同步！相反，您可以利用该`write`方法的阻塞行为：
+
+- 一旦将数据写入缓冲区，该方法即返回。它不会等到缓冲区中的所有数据播放完毕。（如果它等了，您可能没有办法在不造成音频不连续的情况下写入下一个缓冲。）
+- 可以尝试写入比缓冲区更多的数据。在这种情况下，该方法将阻塞（不返回），直到您实际请求的所有数据都已放入缓冲区中为止。换句话说，一次将一个缓冲中有价值的数据写入缓冲区并进行播放，直到剩余的数据全部放入缓冲区中为止，此时该方法返回。无论该方法是否阻塞，只要可以写入此调用中最后一个缓冲区的数据，它将立即返回。同样，这意味着您的代码很可能会在最后一个缓冲区的数据播放完成之前恢复控制。
+- 虽然在许多情况下可以写入比缓冲区容纳的数据更多的数据，但是如果您想确定下一次发出的写操作不会阻塞，则可以将写入的字节数限制为`DataLine`的 `available`方法返回的数字。
+
+这是一个示例，它循环访问从流中读取的大块数据，一次将一个大块写入`SourceDataLine`以便回放：
+
+```java
+//从流中读取大块并将其写入源数据线路
+line.start();
+while (total < totalToRead && !stopped){
+    numBytesRead = stream.read(myData, 0, numBytesToRead);
+    if (numBytesRead == -1) break;
+    total += numBytesRead; 
+    line.write(myData, 0, numBytesRead);
+}
+```
+
+如果您不希望该`write`方法阻塞，则可以先调用该`available`方法（在循环内部），以找出不阻塞即可写入的字节数，然后在从流中读取数据之前将字节数限制为变量`numBytesToRead`。但是，在给定的示例中，阻塞并不重要，因为write方法是在循环内调用的，直到最后一次循环迭代中写入最后一个缓冲区后，该方法才会完成。无论您是否使用阻塞技术，您都可能希望在与应用程序其余部分分离的线程中调用此播放循环，以使您的程序在播放长音频时不会冻结。在循环的每次迭代中，您可以测试用户是否已请求停止播放。此类请求需要设置上面的代码中使用的boolean型变量`stopped`为`true`。
+
+由于`write`在所有数据播放完毕之前返回，那么您如何知道实际播放完成的时间呢？一种方法是在写入最后一个缓冲区的数据后调用`DataLine`的`drain`方法。此方法将阻塞，直到播放完所有数据为止。当控制权返回到程序时，如果需要，您可以释放该线路，而不必担心过早中断任何音频样本的播放：
+
+```java
+line.write(b, offset, numBytesToWrite); 
+//这是对write的最后一次调用
+line.drain();
+line.stop();
+line.close();
+line = null;
+```
+
+当然，您可以故意过早停止播放。例如，应用程序可能会向用户提供“停止”按钮。调用`DataLine`的`stop`方法可立即停止播放，即使在缓冲区中间也是如此。这会将所有未播放的数据保留在缓冲区中，因此，如果您随后调用`start`，则会从中断处继续播放。如果那不是您想发生的事情，则可以通过调用`flush`丢弃缓冲区中剩余的数据。
+
+每当停止数据流时，无论是通过`drain`方法，`stop`方法还是`flush`方法进行了该停止操作，还是因为在应用程序再次调用`write`写入新数据之前已到达播放缓冲区的末尾，`SourceDataLine`都会生成一个`STOP`事件。一个`STOP`事件并不一定意味着`stop`被调用，也并不一定意味着之后调用`isRunning`将返回`false`。但是，这确实意味着`isActive`将返回`false`。（当`start`被调用后，`isRunning`方法就返回`true`，即使生成了`STOP`事件；在调用`stop`后`isRunning`就返回`false`。）重要的是要认识到`START`和`STOP`事件对应于`isActive`，而不是`isRunning`。
+
+### 监控线路状态
+
+开始播放音频后，如何知道完成的时间呢？我们在上面看到了一个解决方案，在写入最后一个数据缓冲区后调用`drain`方法，但是该方法仅适用于`SourceDataLine`。对于`SourceDataLines`和`Clips`都适用的另一种方法是，进行注册，每当线路改变了它的状态时，接收来自线路的通知。这些通知以`LineEvent`对象的形式来组织，其中有四种类型：`OPEN`，`CLOSE`，`START`和`STOP`。
+
+程序中实现`LineListener`接口的任何对象都可以注册以接收此类通知。要实现`LineListener`接口，该对象仅需要一个带有`LineEvent`参数的update方法。若要将此对象注册为该线路的侦听器之一，请调用`Line`的以下方法：
+
+```java
+public void addLineListener(LineListener listener)
+```
+
+每当该线路打开open，关闭close，开始start或停止stop时，它都会向其所有侦听器发送一条`update`消息。您的对象可以查询它收到的`LineEvent`。首先，您可以调用`LineEvent.getLine`以确保停止的线路是您想要的那一条。在我们讨论的这种情况下，您想知道音频是否结束，因此您可以查看`LineEvent`是否为`STOP`类型。如果是的话，您可以检查音频的当前位置（音频也存储在`LineEvent`对象中），并将其与声音的长度（如果知道）进行比较，以查看音频是否到达结尾，而不是因为其他的原因（例如用户单击“停止”按钮，尽管您可能可以在代码的其他位置确定该原因）。
+
+同样，如果您需要知道何时打开open，关闭close或开始start该线路，则可以使用相同的机制。`LineEvents`会由各种不同类型的线路生成，而不仅仅是`Clips`和`SourceDataLines`。但是对于`Port`，您不能指望通过获取事件来了解线路的打开或关闭状态。例如，`Port`在最初创建时可能就是打开的，因此您无需调用该`open`方法，并且`Port`也不会生成`OPEN`事件。（请参阅前面有关《[选择输入和输出端口](https://docs.oracle.com/javase/tutorial/sound/accessing.html#113216)》的讨论 。）
+
+### 同步多线路播放
+
+如果要同时播放多个音频轨道，则可能要使它们完全在同一时间开始和停止。一些混合器用它们的`synchronize`的方法促进这种行为，它允许使用例如`open`，`close`，`start`和`stop`操作，一组线路使用单个命令控制，而不必单独控制每个数据线路。此外，将操作应用于线路的精确度是可控制的。
+
+要找出特定的混频器是否为指定的一组数据线路提供此功能，请调用`Mixer`接口的`isSynchronizationSupported`方法：
+
+```java
+boolean isSynchronizationSupported(Line[] lines, boolean  maintainSync)
+```
+
+第一个参数指定一组特定的数据线，第二个参数表示必须保持同步的精度。如果第二个参数是`true`，该查询询问混合器是否能够*一直*保持在指定的线路控制样本精确的精度 ; 否则，仅在开始和停止操作期间需要精确的同步，而在整个播放过程中则不需要。
+
+<u>我想，第二个参数的意思是，true代表每时每刻都保持样本的精确同步，false代表只在开始和停止的时候保证同步。</u>
+
+### 处理输出音频
+
+某些源数据线具有信号处理控件，例如增益gain，声相pan，混响reverb和采样率sample-rete控件。类似的控件，尤其是增益控件，也可能出现在输出端口上。有关如何确定线路是否具有此类控件以及如何使用它们的更多信息，请参阅《[使用控件处理音频](https://docs.oracle.com/javase/tutorial/sound/controls.html)》。
