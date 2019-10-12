@@ -461,3 +461,112 @@ boolean isSynchronizationSupported(Line[] lines, boolean  maintainSync)
 ### 处理输出音频
 
 某些源数据线具有信号处理控件，例如增益gain，声相pan，混响reverb和采样率sample-rete控件。类似的控件，尤其是增益控件，也可能出现在输出端口上。有关如何确定线路是否具有此类控件以及如何使用它们的更多信息，请参阅《[使用控件处理音频](https://docs.oracle.com/javase/tutorial/sound/controls.html)》。
+
+## （四）捕获音频
+
+*捕获*是指从计算机外部获取信号的过程。音频捕获的常见应用是录制，例如将麦克风输入录制到音频文件中。但是，捕获并不等同于录制，因为录制意味着应用程序始终会保存传入的声音数据。捕获音频的应用程序不一定会存储音频。取而代之的是，它可能会对传入的数据进行某些处理（例如将语音转录为文本），但是一旦音频缓冲结束，就立即丢弃每个音频缓冲。
+
+如 《[样本包概述](https://docs.oracle.com/javase/tutorial/sound/sampled-overview.html)》中所述，Java Sound API实现中的典型音频输入系统包括：
+
+1. 输入端口，例如麦克风端口或输入端口，音频数据从其流入。
+2. 混合器，可以把输入数据放置在其中。
+3. 一个或多个目标数据行，应用程序可以从中检索数据。
+
+不太会翻译这三条，以下为原文：
+
+1. An input port, such as a microphone port or a line-in port, which feeds its incoming audio data into:
+2. A mixer, which places the input data in:
+3. One or more target data lines, from which an application can retrieve the data.
+
+通常，一次只能打开一个输入端口，但是也可以使用音频输入混合器来混合来自多个端口的音频。另一种情况是混音器没有端口，而是通过网络获取音频输入。
+
+《[线路接口层次](https://docs.oracle.com/javase/tutorial/sound/sampled-overview.html#lineHierarchy)》下简要介绍了`TargetDataLine`接口。`TargetDataLine`与`SourceDataLine`接口直接相似，在《[播放音频](https://docs.oracle.com/javase/tutorial/sound/playing.html)》中对此进行了广泛的讨论 。回想一下该`SourceDataLine`接口包括：
+
+- 一种将音频发送到调音台的`write`方法
+- 一种确定可以在不阻塞的情况下将多少数据写入缓冲区的`available`方法
+
+同样，`TargetDataLine`包括：
+
+- 一种从混音器获取音频的`read`方法
+- 一种确定在不阻塞的情况下可以从缓冲区读取多少数据的`available`方法
+
+### 设置TargetDataLine
+
+《[访问音频系统资源](https://docs.oracle.com/javase/tutorial/sound/accessing.html)》中描述了获取目标数据线的过程， 但为方便起见，在此再次列出该过程：
+
+```java
+TargetDataLine line;
+DataLine.Info info = new DataLine.Info(TargetDataLine.class, 
+    format); // format is an AudioFormat object
+if (!AudioSystem.isLineSupported(info)) {
+    // Handle the error ... 
+
+}
+// Obtain and open the line.
+try {
+    line = (TargetDataLine) AudioSystem.getLine(info);
+    line.open(format);
+} catch (LineUnavailableException ex) {
+    // Handle the error ... 
+}
+```
+
+您可以改为调用`Mixer`的`getLine`方法，而不是`AudioSystem`的。
+
+如本例所示，一旦获得目标数据线，就可以通过调用`SourceDataLine`的`open`方法将其保留给应用程序使用，这与《[播放音频](https://docs.oracle.com/javase/tutorial/sound/playing.html)》中源数据线的情况完全相同 。`open`方法的单参数版本使线路的缓冲区使用默认大小。您可以根据应用程序的需要，通过调用两个参数的版本来设置缓冲区大小：
+
+```java
+void open(AudioFormat format, int bufferSize)
+```
+
+### 从TargetDataLine读取数据
+
+线路打开后，就可以开始捕获数据了，但是它还不处于活跃状态。要实际开始音频捕获，请使用`DataLine`的`start`方法。这开始将输入的音频数据传送到线路的缓冲区，以供您的应用程序读取。您的应用程序仅在准备好开始从线路开始读取时，才应该调用`start`；否则，浪费大量的处理时间来填充捕获缓冲区，只是使其溢出（即丢弃数据）。
+
+要开始从缓冲区检索数据，请调用`TargetDataLine`的`read`方法：
+
+```java
+int read(byte[] b, int offset, int length)
+```
+
+此方法尝试从数组中的字节位置`offset`开始，将`length`长度字节的数据读取到数组`b`中。该方法返回实际读取的字节数。
+
+与`SourceDataLine`的`write`方法一样，您可以请求传输超出缓冲区中的实际容量的数据量，因为即使您请求传输很多的缓冲数据，方法也会阻塞直到传递了请求的数据量为止。
+
+为避免应用程序在录制过程中挂起，可以在循环中调用`read`方法，直到检索到所有音频输入为止，如以下示例所示：
+
+```java
+// 假设已经获取并打开了TargetDataLine, line 
+ByteArrayOutputStream out  = new ByteArrayOutputStream();
+int numBytesRead;
+byte[] data = new byte[line.getBufferSize() / 5];
+
+// 开始捕获音频.
+line.start();
+
+// 在这里，stopped是另一个线程设置的全局布尔值
+while (!stopped) {
+   // 从TargetDataLine读取下一个数据块.
+   numBytesRead =  line.read(data, 0, data.length);
+   // 保存此数据块.
+   out.write(data, 0, numBytesRead);
+}     
+```
+
+请注意，在此示例中，将读取数据的字节数组的大小设置为了线路缓冲区的大小的五分之一。如果改为将其设置为与线路的缓冲区一样大并尝试读取整个缓冲区，则需要非常精确的时序，因为如果混音器从线路中读取数据时向线路中传输数据，那么数据将会被丢弃 。如此处所示，通过使用线路缓冲区大小的一部分，您的应用程序将可以更好地与混音器共享对线路缓冲区的访问。
+
+`TargetDataLine`的`read`方法有三个参数：一个字节数组，在数组中的偏移量，以及你想要读取的数据的字节数。在此示例中，第三个参数只是字节数组的长度。该`read`方法返回实际读入数组的字节数。
+
+通常，如本例所示，您是从循环中的线路line中读取数据。在`while`循环内，以任何适于应用程序的方式处理检索到的每个数据块——在这个例子中，将它们写入了`ByteArrayOutputStream`。这里未显示使用单独的线程来设置boolean型变量 `stopped`来终止循环。当用户单击“停止”按钮时，以及在侦听器从该线路接收到`CLOSE`或`STOP`事件时，都可以将该布尔值设置为`true`。对于`CLOSE`事件，侦听器是必需的，对于`STOP`事件，也建议使用侦听器。否则，如果在某种程度上停止了该线路而没有将其设置为`true`，`while`循环将在每次迭代中捕获零字节，从而运行很快并且浪费CPU周期。一个更详尽的代码示例将显示如果捕获动作再次变为活动状态，则重新进入循环。
+
+与源数据线一样，可以`drain`或`flush`目标数据线。例如，如果要将输入记录到文件中，则可能需要在用户单击“停止”按钮时调用`drain`方法。`drain`方法将导致混频器的剩余数据被传递到目标数据线的缓冲区。如果不清除数据，捕获的音频可能会在尾部被过早地截断。
+
+在某些情况下，您可能想刷新`flush`数据。无论如何，如果您既不刷新也不清空数据，则数据将留在混频器中。这意味着当重新开始捕获时，在新录制的开始时会有一些剩余的声音，这可能是不希望的。所以，重新启动捕获之前刷新`flush`目标数据线路可能很有用。
+
+### 监控线路状态
+
+因为`TargetDataLine`接口是继承于`DataLine`，所以目标数据线以与源数据线相同的方式生成事件。您可以注册一个对象，以便在目标数据线路打开open，关闭close，开始start或停止stop时接收事件。有关更多信息，请参见前面有关《[监视线路状态](https://docs.oracle.com/javase/tutorial/sound/playing.html#113711)》的讨论 。
+
+### 处理传入的音频
+
+像某些源数据线一样，某些混频器的目标数据线也具有信号处理控件（signal-processing controls），例如增益（gain），声像（pan），混响（reverb）或采样率控件（sample-rate controls）。输入端口可能也具有类似的控件，尤其是增益控件。在下一节中，您将学习如何确定某行是否具有此类控件，以及如何使用它们。
