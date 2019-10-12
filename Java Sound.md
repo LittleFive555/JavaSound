@@ -570,3 +570,173 @@ while (!stopped) {
 ### 处理传入的音频
 
 像某些源数据线一样，某些混频器的目标数据线也具有信号处理控件（signal-processing controls），例如增益（gain），声像（pan），混响（reverb）或采样率控件（sample-rate controls）。输入端口可能也具有类似的控件，尤其是增益控件。在下一节中，您将学习如何确定某行是否具有此类控件，以及如何使用它们。
+
+## （五）使用控件处理音频
+
+前面的部分讨论了如何播放或捕获音频样本。隐含的目标是尽可能忠实地提供样本，而不进行修改（除了可能将样本与其他音频线路的样本混合在一起）。但是，有时您希望能够修改音频信号。用户可能希望它听起来更大声，更安静，更饱满，更具回响感，音高更高或更低，等等。该页面讨论了提供这些信号处理的Java Sound API功能。
+
+有两种方法可以应用信号处理：
+
+- 您可以通过查询[`Control`](https://docs.oracle.com/javase/8/docs/api/javax/sound/sampled/Control.html)对象，然后根据用户需要设置控件controls来使用混频器或其组成部分线路所支持的任何处理 。混音器和线路支持的典型控件包括增益gain，声相pan和混响reverberation控件。
+- 如果混音器或其线路未提供所需的处理类型，则程序可以直接对音频字节进行操作，并根据需要进行操作。
+
+此页面将更详细地讨论第一种技术，因为第二种技术没有特定的API。
+
+### 控件介绍
+
+混频器在其某些或全部线路上可以具有各种信号处理控件。例如，用于音频捕获的混频器可能具有带增益控制的输入端口，以及带增益和平移控制的目标数据线。用于音频播放的混音器可能在其源数据线上具有采样率控件。在每种情况下，都可以通过`Line`接口的方法来访问控件。
+
+因为`Mixer`接口继承自`Line`，所以混音器本身可以具有自己的一组控件。这些控件可能用作影响所有混音器的源线或目标线的主控件。例如，混频器可能具有一个主增益控制，该主增益控制的分贝值被叠加到其目标线上的各个增益控制的值。
+
+混音器自己的其他控件可能会影响混音器内部用于处理的特殊线路，无论是源线还是目标线。例如，全局混响控件可能会选择混响的类型，以应用于输入信号的混合，并且这种“湿”（混响）信号在传送到混音器的目标线路之前会混进“干”信号中。
+
+如果混音器或其任何线路具有控件，您可能希望通过程序用户界面中的图形对象来显示控件，以便用户可以根据需要调整音频特性。这些控件本身不是图形的；它们只是允许您检索和更改其设置。您可以决定在程序中使用哪种图形表示形式（滑块，按钮等）。
+
+所有控件都作为抽象类`Control`的具体子类实现。许多典型的音频处理控件可以通过基于某种数据类型（例如boolean，enumerated或float）的`Control`抽象子类来描述。例如，布尔控制代表二进制状态控制，例如静音或混响的开/关控制。另一方面，浮点数控件非常适合表示连续可变的控件，例如声像pan，平衡balance或音量volume。
+
+Java Sound API指定以下`Control`的抽象子类：
+
+- [`BooleanControl`](https://docs.oracle.com/javase/8/docs/api/javax/sound/sampled/BooleanControl.html)——表示二进制状态（true or false）控件。例如，静音（mute），独奏（solo）和开/关（on/off）的理想选择将是`BooleanControls`。
+- [`FloatControl`](https://docs.oracle.com/javase/8/docs/api/javax/sound/sampled/FloatControl.html)——提供对某个范围的浮点值的控制的数据模型。例如，音量（volume）和声相（pan）是`FloatControls`类型，可以通过刻度盘或滑条进行操作。
+- [`EnumControl`](https://docs.oracle.com/javase/8/docs/api/javax/sound/sampled/EnumControl.html)——提供选取一个对象集合中某个元素。例如，您可以将用户界面中的一组按钮与`EnumControl`关联起来，以选择多个预设混响设置之一。
+- [`CompoundControl`](https://docs.oracle.com/javase/8/docs/api/javax/sound/sampled/CompoundControl.html)——提供对相关项目集合的访问权限，每个相关项目本身都是`Control`子类的实例。`CompoundControls`代表多控制模块，例如图形均衡器。（图形均衡器通常由一组滑块描绘，每个滑块影响一个`FloatControl`。）
+
+上述`Control`的每个子类都有适合其基本数据类型的方法。大多数类包括设置和获取控件当前值（get and set），获取控件标签等的方法。
+
+当然，每个类都有其特定的方法以及该类表示的数据模型。例如，`EnumControl`有一种方法可以让您获取其可能值的集合，`FloatControl`允许您获取其最小值和最大值以及控件的精度（增量increment或步长step size）。
+
+`Control`的每个子类都有一个对应的`Control.Type`子类，其中包括标识特定控件的静态实例。
+
+下表显示了每个`Control`子类，其对应的`Control.Type`子类以及指示特定种类的控件的静态实例：
+
+
+
+| `Control`         | `Control.Type`         | `Control.Type` **实例**                                      |
+| ----------------- | ---------------------- | ------------------------------------------------------------ |
+| `BooleanControl`  | `BooleanControl.Type`  | `MUTE`–线路静音状态<br> `APPLY_REVERB`–混响开/关             |
+| `CompoundControl` | `CompoundControl.Type` | （没有）                                                     |
+| `EnumControl`     | `EnumControl.Type`     | `REVERB` – 访问混响设置（每个都是ReverbType的实例）          |
+| `FloatControl`    | `FloatControl.Type`    | `AUX_RETURN` – 一条线路上的辅助返回增益<br/>`AUX_SEND` – 辅助发送增益<br/>`BALANCE` – 左右音量平衡<br/>`MASTER_GAIN` – 一条线路上的总体增益<br/>`PAN` – 声相，左右位置<br/>`REVERB_RETURN` – 线路上的混响后增益<br/>`REVERB_SEND` – 线路上的混响前增益<br/>`SAMPLE_RATE` – 播放采样率<br/>`VOLUME` – 线路上的音量 |
+
+Java Sound API的实现可以在其混音器和线路上提供任何或全部的这些控件类型。它也可以提供Java Sound API中未定义的其他控件类型。可以通过这四个抽象子类中的任何一个的具体子类或不是继承于这四个抽象子类的其他`Control`子类（自定义的）来实现此类控件类型。应用程序可以查询每条线路以找到其支持的控件。
+
+### 获得具有所需控件的线路
+
+在许多情况下，应用程序将仅（simply?）显示该线路所支持的任何控件。如果该线路没有任何控件，那么好吧。但是，如果找到具有某些控件的线路很重要，该怎么办？在这种情况下，您可以使用`Line.Info`获取具有正确特性的线，如前面在 [获取所需类型的线下所述](https://docs.oracle.com/javase/tutorial/sound/accessing.html#113154)。
+
+例如，假设您希望使用一个输入端口，以便用户设置声音输入的音量。以下代码摘录显示了如何查询默认混音器以确定其是否具有所需的端口和控件：
+
+```java
+Port lineIn;
+FloatControl volCtrl;
+try {
+  mixer = AudioSystem.getMixer(null);
+  lineIn = (Port)mixer.getLine(Port.Info.LINE_IN);
+  lineIn.open();
+  volCtrl = (FloatControl) lineIn.getControl(
+
+      FloatControl.Type.VOLUME);
+
+  // Assuming getControl call succeeds, 
+  // we now have our LINE_IN VOLUME control.
+} catch (Exception e) {
+  System.out.println("Failed trying to find LINE_IN"
+    + " VOLUME control: exception = " + e);
+}
+if (volCtrl != null)
+  // ...
+```
+
+### 从线路上获取控件
+
+需要在其用户界面中公开控件的应用程序，可以简单地查询可用的线路和控件，然后为每个感兴趣的线路上的每个控件显示适当的用户界面元素。在这种情况下，该程序的唯一任务是为用户提供控件上的“句柄”。不知道这些控件对音频信号有什么作用。只要程序知道如何将线路的控制映射到用户界面元素，Java Sound API的`Mixer`，`Line`以及`Control`结构通常会解决其余的事。
+
+例如，假设您的程序播放声音。您正在使用`SourceDataLine`，如先前在[获取所需类型的线路](https://docs.oracle.com/javase/tutorial/sound/accessing.html#113154)中所述，您可以通过调用`Line`的以下方法访问该线路的控件：
+
+```java
+Control[] getControls()
+```
+
+然后，对于此返回数组中的每个控件，您可以使用以下`Control`的以下方法获取控件的类型：
+
+```java
+Control.Type getType()
+```
+
+知道特定的`Control.Type`实例后，您的程序可以显示相应的用户界面元素。当然，为特定的`Control.Type`选择“相应的用户界面元素” 取决于程序所采用的方法。一方面，您可能使用相同类型的元素来表示同一类的所有`Control.Type`实例。这就需要你来查询`Control.Type`实例使用的*类*，例如`Object.getClass`方法。假设结果与`BooleanControl.Type`相匹配。在这种情况下，您的程序可能会显示一个通用复选框或切换按钮，但是如果其类与`FloatControl.Type`匹配，则您可能会显示一个图形滑块。
+
+另一方面，您的程序可能会区分不同类型的控件（甚至是同一类的控件），并为每个控件使用不同的用户界面元素。这将要求您测试`Control`的`getType`方法返回的*实例*。然后，例如，如果类型与`BooleanControl.Type.APPLY_REVERB`匹配，则您的程序可能会显示一个复选框；如果类型匹配`BooleanControl.Type.MUTE`，则可以显示一个切换按钮。
+
+### 使用控件更改音频信号
+
+既然您知道了如何访问控件并确定控件的类型，本节将介绍如何使用`Controls`来更改音频信号的各个方面。本节并不涵盖所有可用的控件；相反，这里提供了一些示例来向您展示如何入门。这些示例包括：
+
+- 控制线路的静音状态
+- 更改线路的音量
+- 在各种混响预设中选择
+
+假设您的程序已经访问了所有混合器，它们的线路和这些线路上的控件，并且它具有一个数据结构来管理控件及其相应的用户界面元素之间的逻辑关联。然后，将用户对这些控件的操作转换为相应的`Control`方法就变得相当简单。
+
+以下小节描述了一些必须调用才能影响对特定控件所做的更改的方法。
+
+<以上一句话没看懂，给原文>
+
+The following subsections describe some of the methods that must be invoked to affect the changes to specific controls.
+
+#### 控制线路的静音状态
+
+控制任何线路的静音状态仅需调用`BooleanControl`的以下方法即可：
+
+```java
+void setValue(boolean value)
+```
+
+（程序大概通过引用其控制管理数据结构，来知道静音是`BooleanControl`的一个实例。）要使通过线路的信号静音，程序要调用上面的方法，将其指定为`true`值。要关闭静音，使信号流过线路，程序将调用参数设置为`false`的方法。
+
+#### 更改线路的音量
+
+假设您的程序将特定的图形滑块与特定线路的音量控件相关联。音量控制（即`FloatControl.Type.VOLUME`）的值使用`FloatControl`的以下方法来设置：
+
+```java
+void setValue(float newValue)
+```
+
+检测到用户移动了滑块，程序将获取滑块的当前值，并将其作为参数`newValue`传递给上述方法。这将改变流经“拥有”控件的线路的信号的音量。
+
+#### 在各种混响预设中选择
+
+假设我们的程序有一个混音器，其中的一条线路具有`EnumControl.Type.REVERB`类型的控件。调用`EnumControl`方法：
+
+```java
+java.lang.Objects[] getValues()
+```
+
+通过调用该方法，控件产生一个`ReverbType`对象数组。如果需要，可以使用`ReverbType`的以下方法访问每个对象的特定参数设置：
+
+```java
+int getDecayTime() 
+int getEarlyReflectionDelay() 
+float getEarlyReflectionIntensity() 
+int getLateReflectionDelay() 
+float getLateReflectionIntensity() 
+```
+
+例如，如果一个程序只想要一个听起来像在洞穴中的混响设置，则它可以遍历`ReverbType`对象，直到找到其`getDecayTime`返回值大于2000 的对象为止。有关这些方法的详细说明，包括一些典型的返回值，请参阅的API参考文档`javax.sound.sampled.ReverbType`。
+
+但是，通常，程序会为该`getValues`方法返回的数组中的每个`ReverbType`对象创建一个用户界面元素，例如单选按钮。当用户单击这些单选按钮之一时，程序将调用`EnumControl`的以下方法：
+
+```java
+void setValue(java.lang.Object value) 
+```
+
+其中`value`设置为与新启用的按钮相对应的`ReverbType`。然后，通过“拥有”该`EnumControl`的线路发送的音频信号，将根据构成控件当前电流的参数设置`ReverbType`（即，该方法`ReverbType`的`value`参数中指定的特定参数）回响`setValue`。
+
+因此，从我们的应用程序的角度来看，使用户能够从一个混响预设（即ReverbType）变换到另一个混响预设，仅是将`getValues`返回的数组的每个元素连接到一个单独的单选按钮的问题。
+
+### 直接处理音频数据
+
+`Control`API允许Java Sound API的一种实现或混音器的第三方提供程序通过控件提供任意种类的信号处理。但是，如果没有混频器提供您所需的那种信号处理呢？这将需要更多的工作，但是您可能可以在程序中实现信号处理。因为Java Sound API允许您以字节数组的形式访问音频数据，所以可以选择任何方式更改这些字节。
+
+如果您要处理传入的声音，则可以从`TargetDataLine`中读取字节，然后对其进行操作。可以产生令人神往的结果的算法简单的（An algorithmically trivial example that can yield sonically intriguing results）示例是，通过以相反的顺序排列其帧来向后播放声音。这个琐碎的示例可能在您的程序中用处不大，但是有许多复杂的数字信号处理（DSP）技术可能更合适。一些示例包括均衡（equalization），动态范围压缩（dynamic-range compression），峰值限制（peak limiting）和时间拉伸或压缩（time stretching or compression），以及特殊效果，例如延迟（delay），合唱（chorus），镶边（flanging），失真（distortion）等。
+
+要播放处理后的声音，可以将经过处理的字节数组放入`SourceDataLine`或`Clip`中。当然，字节数组不必从现有的音频产生。您可以从头开始合成音频，尽管这需要一些声学知识，或者需要使用音频合成功能。对于处理或合成，您可能需要查阅音频DSP教科书中感兴趣的算法，或者将第三方的信号处理功能库导入程序。要播放合成声音，请考虑`javax.sound.midi`包中的`Synthesizer`API 是否满足您的需求。稍后您将`javax.sound.midi`在《[合成声音](https://docs.oracle.com/javase/tutorial/sound/MIDI-synth.html)》下 了解更多信息。
